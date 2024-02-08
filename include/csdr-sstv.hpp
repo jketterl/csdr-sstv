@@ -1,6 +1,7 @@
 #pragma once
 
 #include <csdr/module.hpp>
+#include <vector>
 
 #define SAMPLERATE 12000.0
 
@@ -23,9 +24,14 @@ namespace Csdr::Sstv {
             Mode mode;
     };
 
-    struct metrics {
-        float error;
-        float offset;
+    class metrics {
+        public:
+            float error;
+            float offset;
+            int8_t invert;
+            bool operator < (metrics other) {
+                return error < other.error;
+            }
     };
 
     class SstvDecoder: public Csdr::Module<float, unsigned char> {
@@ -42,15 +48,22 @@ namespace Csdr::Sstv {
             const float carrier_1500 = 1500.0 / (SAMPLERATE / 2);
             // max color
             const float carrier_2300 = 2300.0 / (SAMPLERATE / 2);
+            // vis bit high
+            const float carrier_1100 = 1100.0 / (SAMPLERATE / 2);
+            // vis bit low
+            const float carrier_1300 = 1300.0 / (SAMPLERATE / 2);
 
             DecoderState state = SYNC;
-            float previous_error = INFINITY;
+            std::vector<metrics> previous_errors;
             SstvConfig* config = nullptr;
             float offset = 0.0;
+            // possible values: 1 and -1, should not take other values.
+            // 1 is regular (USB), -1 is inverted (LSB)
+            int8_t invert = 1;
 
             uint16_t currentLine = 0;
 
-            float getSyncError(float* input);
+            metrics getSyncError(float* input);
             metrics calculateMetrics(float* input, size_t len, float target);
             int getVis();
             float readRawVis();
