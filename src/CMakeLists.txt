@@ -1,4 +1,4 @@
-add_library(csdr-sstv SHARED csdr-sstv.cpp version.cpp)
+add_library(csdr-sstv SHARED csdr-sstv.cpp version.cpp modes.cpp)
 file(GLOB LIBCSDRSSTV_HEADERS
     "${PROJECT_SOURCE_DIR}/include/*.hpp"
 )

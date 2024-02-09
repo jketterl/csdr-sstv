@@ -6,31 +6,49 @@
 using namespace Csdr::Sstv;
 
 SstvDecoder::~SstvDecoder() {
-    delete config;
+    delete mode;
 }
 
 bool SstvDecoder::canProcess() {
-    return reader->available() > 7321;
+    switch (state) {
+        case SYNC:
+            // calibration header = 300ms + 10ms + 300ms
+            // VIS code = 30ms * 10;
+            // total 910 ms
+            return reader->available() > (size_t) (.91 * SAMPLERATE);
+        case DATA:
+            // total time for one line
+            // worst case
+            // assuming component sync takes twice as long
+            float required = mode->getLineSyncDuration() + mode->getComponentCount() * (mode->getComponentSyncDuration() * 2 + mode->getComponentDuration());
+            return reader->available() > (size_t) (required * SAMPLERATE);
+    }
+    return false;
 }
 
 void SstvDecoder::process() {
     float* input = reader->getReadPointer();
     switch (state) {
         case SYNC: {
-            metrics m = getSyncError(input);
+            Metrics m = getSyncError(input);
             if (m.error < 0.2) {
                 // wait until we have reached the point of least error
                 previous_errors.push_back(m);
+                std::cerr << "error cache size: " << previous_errors.size() << "; error: " << m.error << std::endl;
                 if (previous_errors.size() > 100) {
                     auto it = std::min_element(previous_errors.begin(), previous_errors.end());
                     if (it == previous_errors.begin() && it->error < .1) {
                         std::cerr << "overflow; sync error: " << it->error << "; offset: " << it->offset << "; invert: " << (int) it->invert << std::endl;
                         offset = it->offset;
                         invert = it->invert;
-                        reader->advance(7220);
-                        previous_errors.clear();
-                        state = VIS;
-                        break;
+                        if (attemptVisDecode(input + 7220)) {
+                            unsigned int syncOffset = 0;
+                            if (mode->getLineSyncPosition() == 0) {
+                                syncOffset = mode->getLineSyncDuration() * SAMPLERATE;
+                            }
+                            reader->advance(7220 + 3600 - syncOffset);
+                            break;
+                        }
                     }
                     previous_errors.erase(previous_errors.begin());
                 }
@@ -39,14 +57,18 @@ void SstvDecoder::process() {
                 if (!previous_errors.empty()) {
                     auto it = std::min_element(previous_errors.begin(), previous_errors.end());
                     if (it->error < .1) {
-                        auto index = std::distance(previous_errors.begin(), it);
-                        std::cerr << "sync error: " << it->error << "; offset: " << it->offset << "; invert: " << (int) it->invert << std::endl;
+                        auto age = std::distance(it, previous_errors.end());
+                        std::cerr << "age: " << age << " sync error: " << it->error << "; offset: " << it->offset << "; invert: " << (int) it->invert << std::endl;
                         offset = it->offset;
                         invert = it->invert;
-                        reader->advance(7220 + index);
-                        previous_errors.clear();
-                        state = VIS;
-                        break;
+                        if (attemptVisDecode(input + 7320 - age)) {
+                            unsigned int syncOffset = 0;
+                            if (mode->getLineSyncPosition() == 0) {
+                                syncOffset = mode->getLineSyncDuration() * SAMPLERATE;
+                            }
+                            reader->advance((7320 - age) + 3600 - syncOffset);
+                            break;
+                        }
                     }
                 }
                 previous_errors.clear();
@@ -55,23 +77,13 @@ void SstvDecoder::process() {
             }
             break;
         }
-        case VIS: {
-            int vis = getVis();
-            if (vis < 0) {
-                state = SYNC;
-            } else {
-                std::cerr << "Detected VIS: " << vis << std::endl;
-                delete config;
-                config = new SstvConfig(vis);
-                state=DATA;
-            }
-            break;
-        }
         case DATA: {
             std::cerr << "Reading line " << currentLine << std::endl;
             readColorLine();
-            if (++currentLine >= config->getVerticalLines()) {
+            if (++currentLine >= mode->getVerticalLines()) {
                 currentLine = 0;
+                delete mode;
+                mode = nullptr;
                 state = SYNC;
             }
             break;
@@ -79,9 +91,35 @@ void SstvDecoder::process() {
     }
 }
 
-metrics SstvDecoder::getSyncError(float *input) {
+bool SstvDecoder::attemptVisDecode(const float *input) {
+    int vis = getVis(input);
+    if (vis < 0) return false;
 
-    metrics m[3] = {
+    std::cerr << "Detected VIS: " << vis << std::endl;
+    mode = Mode::fromVis(vis);
+    if (mode == nullptr) {
+        std::cerr << "mode not implemented; no mode for vis " << vis << std::endl;
+        return false;
+    }
+
+    memcpy(writer->getWritePointer(), outputSync, sizeof(outputSync));
+    writer->advance(sizeof(outputSync));
+    OutputDescription out = {
+        .vis = (uint16_t) vis,
+        .pixels = mode->getHorizontalPixels(),
+        .lines = mode->getVerticalLines(),
+    };
+    memcpy(writer->getWritePointer(), &out, sizeof(OutputDescription));
+    writer->advance(sizeof(OutputDescription));
+
+    previous_errors.clear();
+    state = DATA;
+    return true;
+}
+
+Metrics SstvDecoder::getSyncError(float *input) {
+
+    Metrics m[3] = {
         calculateMetrics(input, 3600, carrier_1900),
         calculateMetrics(input + 3600, 120, carrier_1200),
         calculateMetrics(input + 3720, 3600, carrier_1900),
@@ -108,7 +146,7 @@ metrics SstvDecoder::getSyncError(float *input) {
     }
 
     // try the same again in inverse mode
-    metrics n[3] = {
+    Metrics n[3] = {
         calculateMetrics(input, 3600, -carrier_1900),
         calculateMetrics(input + 3600, 120, -carrier_1200),
         calculateMetrics(input + 3720, 3600, -carrier_1900),
@@ -135,94 +173,110 @@ metrics SstvDecoder::getSyncError(float *input) {
     };
 }
 
-metrics SstvDecoder::calculateMetrics(float *input, size_t len, float target) {
+Metrics SstvDecoder::calculateMetrics(float *input, size_t len, float target) {
     float sum = 0.0;
-    for (ssize_t i = 0; i < len; i += 10) {
+    //unsigned int counter = 0;
+    for (ssize_t i = 10; i < len - 10; i += 10) {
         float d = input[i] - target;
         sum += d;
+        //counter++;
     }
-    float offset = sum / (float) (len / 10);
+    float offset = sum / (float) ((len - 20) / 10);
+    //std::cerr << "counter: " << counter << "; calculator: " << ((len - 20) / 10) << std::endl;
 
     float error = 0.0;
-    for (ssize_t i = 0; i < len; i++) {
+    for (ssize_t i = 10; i < len - 10; i++) {
         error += fabsf(input[i] - offset - target);
     }
 
-    return metrics {
-        .error = error / (float) len,
+    return Metrics {
+        .error = error / (float) (len - 20),
         .offset = offset,
     };
 }
 
-int SstvDecoder::getVis() {
+int SstvDecoder::getVis(const float* input) {
     uint8_t result = 0;
     bool parity = false;
     float visError = 0.0;
-    visError += readRawVis() - carrier_1200;
+    visError += fabsf(readRawVis(input) - carrier_1200);
+    unsigned int numSamples = .03 * SAMPLERATE;
     for (unsigned int i = 0; i < 7; i++) {
-        float raw = readRawVis();
+        float raw = readRawVis(input + (i + 1) * numSamples);
         bool visBit = raw < carrier_1200;
         if (visBit) {
-            visError += raw - carrier_1100;
+            visError += fabsf(raw - carrier_1100);
         } else {
-            visError += raw - carrier_1300;
+            visError += fabsf(raw - carrier_1300);
         }
         result |= visBit << i;
         parity ^= visBit;
     }
-    bool parityBit = readRawVis() < carrier_1200;
+    bool parityBit = readRawVis(input + 8 * numSamples) < carrier_1200;
     if (parity != parityBit) {
         std::cerr << "vis parity check failed" << std::endl;
         return -1;
     }
-    visError += readRawVis() - carrier_1200;
+    visError += fabsf(readRawVis(input + 9 * numSamples) - carrier_1200);
     if (visError > .1) {
         std::cerr << "bad overall VIS error: " << visError << std::endl;
         return -1;
     }
+    std::cerr << "overall VIS error: " << visError << std::endl;
     return result;
 }
 
-float SstvDecoder::readRawVis() {
+float SstvDecoder::readRawVis(const float* input) {
     unsigned int numSamples = .03 * SAMPLERATE;
     float average = 0.0;
-    float* input = reader->getReadPointer();
-    for (unsigned int k = 0; k < numSamples; k++) {
+    for (unsigned int k = 10; k < numSamples - 10; k++) {
         average += input[k];
     }
-    reader->advance(numSamples);
-    return ((float) invert * average) / (float) numSamples - offset;
+    return ((float) invert * average) / (float) (numSamples - 20) - offset;
 }
 
 void SstvDecoder::readColorLine() {
-    std::cerr << "line sync error: " << lineSync(carrier_1200, .004862) << std::endl;
-    //reader->advance(.004862 * SAMPLERATE);
+    if (writer->writeable() < mode->getHorizontalPixels() * 3) {
+        std::cerr << "could not write image data";
+        return;
+    }
 
-    uint8_t pixels[config->getHorizontalPixels()][3];
-    unsigned int lineSamples = (unsigned int) (.146875 * SAMPLERATE);
-    for (unsigned int i = 0; i < 3; i++) {
-        if (i > 0) {
-            reader->advance(.000572 * SAMPLERATE);
-            //lineSync(carrier_1500, .000572);
+    unsigned char* pixels = writer->getWritePointer();
+    unsigned int lineSamples = (unsigned int) (mode->getComponentDuration() * SAMPLERATE);
+    std::cerr << "component duration: " << mode->getComponentDuration() << "; number of samples: " << lineSamples << std::endl;
+
+    for (unsigned int i = 0; i < mode->getComponentCount(); i++) {
+        if (mode->getLineSyncPosition() == i) {
+           std::cerr << "performing line sync on " << i << "; line sync error: " << lineSync(carrier_1200, mode->getLineSyncDuration()) << std::endl;
+            //reader->advance(.004862 * SAMPLERATE);
+        }
+
+
+        if (mode->hasComponentSync()) {
+            if (i > 0) {
+                lineSync(carrier_1200, mode->getComponentSyncDuration() * SAMPLERATE);
+            }
+        } else {
+            reader->advance(mode->getComponentSyncDuration() * SAMPLERATE);
         }
         float* input = reader->getReadPointer();
         // simple mapping for GBR -> RGB
+        // TODO complex color systems (YCrCb)
         unsigned int color = (i + 1) % 3;
-        for (unsigned int k = 0; k < config->getHorizontalPixels(); k++) {
+        for (unsigned int k = 0; k < mode->getHorizontalPixels(); k++) {
             // todo average
-            float raw = ((float) invert * input[k * lineSamples / config->getHorizontalPixels()]) - offset;
+            float raw = ((float) invert * input[k * lineSamples / mode->getHorizontalPixels()]) - offset;
             if (raw < carrier_1500) {
-                pixels[k][color] = 0;
+                pixels[k * 3 + color] = 0;
             } else if (raw > carrier_2300) {
-                pixels[k][color] = 255;
+                pixels[k * 3 + color] = 255;
             } else {
-                pixels[k][color] = (uint8_t) (((raw - carrier_1500) / (carrier_2300 - carrier_1500)) * 255);
+                pixels[k * 3 + color] = (uint8_t) (((raw - carrier_1500) / (carrier_2300 - carrier_1500)) * 255);
             }
         }
         reader->advance(lineSamples);
     }
-    std::memcpy(writer->getWritePointer(), pixels, config->getHorizontalPixels() * 3);
-    writer->advance(config->getHorizontalPixels() * 3);
+    writer->advance(mode->getHorizontalPixels() * 3);
 }
 
 float SstvDecoder::lineSync(float carrier, float duration) {
@@ -233,35 +287,20 @@ float SstvDecoder::lineSync(float carrier, float duration) {
     // within 100 Hz of carrier
     float threshold = carrier + 100.0 / (SAMPLERATE / 2);
     unsigned int passedSamples = 0;
+    std::cerr << "line sync: threshold = " << threshold;
     while (passedSamples++ < timeoutSamples) {
+        std::cerr << "<";
         float sample = (float) invert * input[passedSamples] - offset;
         error += sample - carrier;
         if (sample < threshold) break;
     }
     while (passedSamples++ < timeoutSamples) {
+        std::cerr << ">";
         float sample = (float) invert * input[passedSamples] - offset;
-        error += input[passedSamples] - carrier;
+        error += sample - carrier;
         if (sample > threshold) break;
     }
+    std::cerr << std::endl;
     reader->advance(passedSamples);
     return error / (float) passedSamples;
-}
-
-SstvConfig::SstvConfig(uint8_t vis) {
-    colorMode = vis & 0b11;
-    horizontalResolution = (vis & 0b100) >> 2;
-    verticalResolution = (vis & 0b1000) >> 3;
-    mode = static_cast<Mode>((vis & 0b1110000) >> 4);
-}
-
-bool SstvConfig::isColor() {
-    return colorMode == 0;
-}
-
-uint16_t SstvConfig::getHorizontalPixels() {
-    return verticalResolution ? 320 : 160;
-}
-
-uint16_t SstvConfig::getVerticalLines() {
-    return horizontalResolution ? 256 : 128;
 }

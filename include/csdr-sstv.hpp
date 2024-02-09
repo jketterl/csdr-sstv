@@ -2,37 +2,32 @@
 
 #include <csdr/module.hpp>
 #include <vector>
+#include "modes.hpp"
 
 #define SAMPLERATE 12000.0
 
 namespace Csdr::Sstv {
 
-    enum DecoderState { SYNC, VIS, DATA };
+    enum DecoderState { SYNC, DATA };
 
-    enum Mode { ROBOT, WRAASE, MARTIN, SCOTTIE, AVT };
-
-    class SstvConfig {
-        public:
-            explicit SstvConfig(uint8_t vis);
-            bool isColor();
-            uint16_t getHorizontalPixels();
-            uint16_t getVerticalLines();
-        private:
-            uint8_t colorMode;
-            bool horizontalResolution;
-            bool verticalResolution;
-            Mode mode;
-    };
-
-    class metrics {
+    class Metrics {
         public:
             float error;
             float offset;
             int8_t invert;
-            bool operator < (metrics other) {
+            bool operator < (Metrics other) {
                 return error < other.error;
             }
     };
+
+    struct OutputDescription {
+        // lets reserve 2 bytes for extended vis codes
+        uint16_t vis;
+        uint16_t pixels;
+        uint16_t lines;
+    };
+
+    char outputSync[4] = { 'S', 'Y', 'N', 'C' };
 
     class SstvDecoder: public Csdr::Module<float, unsigned char> {
         public:
@@ -54,8 +49,8 @@ namespace Csdr::Sstv {
             const float carrier_1300 = 1300.0 / (SAMPLERATE / 2);
 
             DecoderState state = SYNC;
-            std::vector<metrics> previous_errors;
-            SstvConfig* config = nullptr;
+            std::vector<Metrics> previous_errors;
+            Mode* mode = nullptr;
             float offset = 0.0;
             // possible values: 1 and -1, should not take other values.
             // 1 is regular (USB), -1 is inverted (LSB)
@@ -63,10 +58,11 @@ namespace Csdr::Sstv {
 
             uint16_t currentLine = 0;
 
-            metrics getSyncError(float* input);
-            metrics calculateMetrics(float* input, size_t len, float target);
-            int getVis();
-            float readRawVis();
+            Metrics getSyncError(float* input);
+            Metrics calculateMetrics(float* input, size_t len, float target);
+            bool attemptVisDecode(const float* input);
+            int getVis(const float* input);
+            float readRawVis(const float* input);
             float lineSync(float carrier, float duration);
 
             void readColorLine();
