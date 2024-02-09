@@ -243,14 +243,13 @@ void SstvDecoder::readColorLine() {
 
     unsigned char* pixels = writer->getWritePointer();
     unsigned int lineSamples = (unsigned int) (mode->getComponentDuration() * SAMPLERATE);
-    std::cerr << "component duration: " << mode->getComponentDuration() << "; number of samples: " << lineSamples << std::endl;
+    float samplesPerPixel = (float) lineSamples / mode->getHorizontalPixels();
 
     for (unsigned int i = 0; i < mode->getComponentCount(); i++) {
         if (mode->getLineSyncPosition() == i) {
            std::cerr << "performing line sync on " << i << "; line sync error: " << lineSync(carrier_1200, mode->getLineSyncDuration()) << std::endl;
             //reader->advance(.004862 * SAMPLERATE);
         }
-
 
         if (mode->hasComponentSync()) {
             if (i > 0) {
@@ -264,8 +263,11 @@ void SstvDecoder::readColorLine() {
         // TODO complex color systems (YCrCb)
         unsigned int color = (i + 1) % 3;
         for (unsigned int k = 0; k < mode->getHorizontalPixels(); k++) {
-            // todo average
-            float raw = ((float) invert * input[k * lineSamples / mode->getHorizontalPixels()]) - offset;
+            float raw = 0.0;
+            for (unsigned int l = 0; l < (unsigned int) samplesPerPixel; l++) {
+                raw += input[(unsigned int) (k * samplesPerPixel) + l];
+            }
+            raw = ((float) invert * raw - offset) / (unsigned int) samplesPerPixel;
             if (raw < carrier_1500) {
                 pixels[k * 3 + color] = 0;
             } else if (raw > carrier_2300) {
