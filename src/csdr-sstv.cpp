@@ -259,9 +259,8 @@ void SstvDecoder::readColorLine() {
             reader->advance(mode->getComponentSyncDuration() * SAMPLERATE);
         }
         float* input = reader->getReadPointer();
-        // simple mapping for GBR -> RGB
         // TODO complex color systems (YCrCb)
-        unsigned int color = (i + 1) % 3;
+        unsigned int color = (i + mode->getColorRotation()) % 3;
         for (unsigned int k = 0; k < mode->getHorizontalPixels(); k++) {
             float raw = 0.0;
             for (unsigned int l = 0; l < (unsigned int) samplesPerPixel; l++) {
@@ -290,19 +289,26 @@ float SstvDecoder::lineSync(float carrier, float duration) {
     float threshold = carrier + 100.0 / (SAMPLERATE / 2);
     unsigned int passedSamples = 0;
     std::cerr << "line sync: threshold = " << threshold;
+    /*
     while (passedSamples++ < timeoutSamples) {
         std::cerr << "<";
         float sample = (float) invert * input[passedSamples] - offset;
         error += sample - carrier;
         if (sample < threshold) break;
     }
+    */
+    passedSamples = (unsigned int) (duration * SAMPLERATE * 0.9);
     while (passedSamples++ < timeoutSamples) {
+        float average = 0;
+        for (unsigned int i = 0; i < 10; i++) {
+            average += input[passedSamples + i];
+        }
         std::cerr << ">";
-        float sample = (float) invert * input[passedSamples] - offset;
-        error += sample - carrier;
+        float sample = (float) invert * (average / 10) - offset;
+        error += fabsf(sample - carrier);
         if (sample > threshold) break;
     }
     std::cerr << std::endl;
-    reader->advance(passedSamples);
+    reader->advance(std::min(passedSamples + 5, timeoutSamples));
     return error / (float) passedSamples;
 }

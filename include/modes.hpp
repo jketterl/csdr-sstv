@@ -24,6 +24,8 @@ namespace Csdr::Sstv {
             // if component sync is false, this is used as an inter-component delay
             virtual float getComponentSyncDuration() = 0;
             virtual float getComponentDuration() = 0;
+            // this transforms GBR -> RGB in the decoder.
+            virtual uint8_t getColorRotation() { return 1; }
         protected:
             // protected constructor... use fromVis() or a derived class.
             explicit Mode(int visCode);
