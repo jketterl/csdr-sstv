@@ -20,7 +20,8 @@ bool SstvDecoder::canProcess() {
             // total time for one line
             // worst case
             // assuming component sync takes twice as long
-            float required = mode->getLineSyncDuration() + mode->getComponentCount() * (mode->getComponentSyncDuration() * 2 + mode->getComponentDuration());
+            // assuming component 0 is the longest one
+            float required = mode->getLineSyncDuration() + mode->getComponentCount() * (mode->getComponentSyncDuration(0) * 2 + mode->getComponentDuration(0));
             return reader->available() > (size_t) (required * SAMPLERATE);
     }
     return false;
@@ -31,13 +32,13 @@ void SstvDecoder::process() {
     switch (state) {
         case SYNC: {
             Metrics m = getSyncError(input);
-            if (m.error < 0.2) {
+            if (m.error < 0.5) {
                 // wait until we have reached the point of least error
                 previous_errors.push_back(m);
                 std::cerr << "error cache size: " << previous_errors.size() << "; error: " << m.error << std::endl;
                 if (previous_errors.size() > 100) {
                     auto it = std::min_element(previous_errors.begin(), previous_errors.end());
-                    if (it == previous_errors.begin() && it->error < .1) {
+                    if (it == previous_errors.begin() && it->error < .3) {
                         std::cerr << "overflow; sync error: " << it->error << "; offset: " << it->offset << "; invert: " << (int) it->invert << std::endl;
                         offset = it->offset;
                         invert = it->invert;
@@ -56,7 +57,7 @@ void SstvDecoder::process() {
             } else {
                 if (!previous_errors.empty()) {
                     auto it = std::min_element(previous_errors.begin(), previous_errors.end());
-                    if (it->error < .1) {
+                    if (it->error < .3) {
                         auto age = std::distance(it, previous_errors.end());
                         std::cerr << "age: " << age << " sync error: " << it->error << "; offset: " << it->offset << "; invert: " << (int) it->invert << std::endl;
                         offset = it->offset;
@@ -119,120 +120,96 @@ bool SstvDecoder::attemptVisDecode(const float *input) {
 
 Metrics SstvDecoder::getSyncError(float *input) {
 
-    Metrics m[3] = {
-        calculateMetrics(input, 3600, carrier_1900),
-        calculateMetrics(input + 3600, 120, carrier_1200),
-        calculateMetrics(input + 3720, 3600, carrier_1900),
+    StdDevResult m[3] = {
+        calculateStandardDeviation(input, 3600),
+        calculateStandardDeviation(input + 3600, 120),
+        calculateStandardDeviation(input + 3720, 3600),
     };
 
-    float min_offset = INFINITY, max_offset = 0;
-    float error = 0.0;
-    float offset_sum = 0.0;
-    for (unsigned int i = 0; i < 3; i++) {
-        min_offset = std::min(min_offset, m[i].offset);
-        max_offset = std::max(max_offset, m[i].offset);
-        offset_sum += m[i].offset;
-        error += m[i].error;
-    }
+    float targets[3] = {
+        carrier_1900,
+        carrier_1200,
+        carrier_1900,
+    };
 
     // gotta be within 100 Hz
     float max_deviation = 100.0 / (SAMPLERATE / 2);
-    if (max_offset - min_offset < max_deviation) {
-        return {
-            .error = error / 3,
-            .offset = offset_sum / 3,
-            .invert = 1,
-        };
+
+    // try for positive and negative (i.e. USB and LSB)
+    for (int8_t factor : { 1, -1 }) {
+        float min_offset = INFINITY, max_offset = 0;
+        float error = 0.0;
+        float offset_sum = 0.0;
+        for (unsigned int i = 0; i < 3; i++) {
+            offset = m[i].average - targets[i] * (float) factor;
+            min_offset = std::min(min_offset, offset);
+            max_offset = std::max(max_offset, offset);
+            offset_sum += offset;
+            error += m[i].deviation;
+        }
+
+        if (max_offset - min_offset < max_deviation) {
+            return {
+                .error = error / 3,
+                .offset = offset_sum / 3,
+                .invert = factor,
+            };
+        }
     }
 
-    // try the same again in inverse mode
-    Metrics n[3] = {
-        calculateMetrics(input, 3600, -carrier_1900),
-        calculateMetrics(input + 3600, 120, -carrier_1200),
-        calculateMetrics(input + 3720, 3600, -carrier_1900),
-    };
-    min_offset = 0, max_offset = -INFINITY;
-    error = 0.0;
-    offset_sum = 0.0;
-    for (unsigned int i = 0; i < 3; i++) {
-        min_offset = std::min(min_offset, n[i].offset);
-        max_offset = std::max(max_offset, n[i].offset);
-        offset_sum += n[i].offset;
-        error += n[i].error;
-    }
-    if (max_offset - min_offset < max_deviation) {
-        return {
-            .error = error / 3,
-            .offset = offset_sum / 3,
-            .invert = -1,
-        };
-    }
-
+    // deterrent
     return {
         .error = INFINITY
-    };
-}
-
-Metrics SstvDecoder::calculateMetrics(float *input, size_t len, float target) {
-    float sum = 0.0;
-    //unsigned int counter = 0;
-    for (ssize_t i = 10; i < len - 10; i += 10) {
-        float d = input[i] - target;
-        sum += d;
-        //counter++;
-    }
-    float offset = sum / (float) ((len - 20) / 10);
-    //std::cerr << "counter: " << counter << "; calculator: " << ((len - 20) / 10) << std::endl;
-
-    float error = 0.0;
-    for (ssize_t i = 10; i < len - 10; i++) {
-        error += fabsf(input[i] - offset - target);
-    }
-
-    return Metrics {
-        .error = error / (float) (len - 20),
-        .offset = offset,
     };
 }
 
 int SstvDecoder::getVis(const float* input) {
     uint8_t result = 0;
     bool parity = false;
-    float visError = 0.0;
-    visError += fabsf(readRawVis(input) - carrier_1200);
     unsigned int numSamples = .03 * SAMPLERATE;
+
+    float visError = 0.0;
+    StdDevResult results[10];
+    for (unsigned int i = 0; i < 10; i++) {
+        results[i] = calculateStandardDeviation(input + i * numSamples, numSamples);
+        visError += results[i].deviation;
+    }
+    visError /= 10;
+
+    if (visError > .1) {
+        std::cerr << "bad overall VIS error: " << visError << std::endl;
+        return -1;
+    }
+
     for (unsigned int i = 0; i < 7; i++) {
-        float raw = readRawVis(input + (i + 1) * numSamples);
-        bool visBit = raw < carrier_1200;
-        if (visBit) {
-            visError += fabsf(raw - carrier_1100);
-        } else {
-            visError += fabsf(raw - carrier_1300);
-        }
+        bool visBit = (float) invert * results[i + 1].average - offset < carrier_1200;
         result |= visBit << i;
         parity ^= visBit;
     }
-    bool parityBit = readRawVis(input + 8 * numSamples) < carrier_1200;
+    bool parityBit = (float) invert * results[8].average - offset < carrier_1200;
     if (parity != parityBit) {
-        std::cerr << "vis parity check failed" << std::endl;
-        return -1;
-    }
-    visError += fabsf(readRawVis(input + 9 * numSamples) - carrier_1200);
-    if (visError > .1) {
-        std::cerr << "bad overall VIS error: " << visError << std::endl;
+        std::cerr << "vis parity check failed (would be vis = " << (int) result << ")" << std::endl;
         return -1;
     }
     std::cerr << "overall VIS error: " << visError << std::endl;
     return result;
 }
 
-float SstvDecoder::readRawVis(const float* input) {
-    unsigned int numSamples = .03 * SAMPLERATE;
+StdDevResult SstvDecoder::calculateStandardDeviation(const float *input, size_t len) {
     float average = 0.0;
-    for (unsigned int k = 10; k < numSamples - 10; k++) {
+    for (unsigned int k = 0; k < len; k++) {
         average += input[k];
     }
-    return ((float) invert * average) / (float) (numSamples - 20) - offset;
+    average /= (float) len;
+    float sum = 0.0;
+    for (unsigned int k = 0; k < len; k++) {
+        sum += powf(input[k] - average, 2);
+    }
+
+    return StdDevResult{
+        .average = average,
+        .deviation = sqrtf(sum / (float) (len - 1)),
+    };
 }
 
 void SstvDecoder::readColorLine() {
@@ -242,21 +219,22 @@ void SstvDecoder::readColorLine() {
     }
 
     unsigned char* pixels = writer->getWritePointer();
-    unsigned int lineSamples = (unsigned int) (mode->getComponentDuration() * SAMPLERATE);
-    float samplesPerPixel = (float) lineSamples / mode->getHorizontalPixels();
 
-    for (unsigned int i = 0; i < mode->getComponentCount(); i++) {
+    for (uint8_t i = 0; i < mode->getComponentCount(); i++) {
+        unsigned int lineSamples = (unsigned int) (mode->getComponentDuration(i) * SAMPLERATE);
+        float samplesPerPixel = (float) lineSamples / mode->getHorizontalPixels();
+
         if (mode->getLineSyncPosition() == i) {
-           std::cerr << "performing line sync on " << i << "; line sync error: " << lineSync(carrier_1200, mode->getLineSyncDuration()) << std::endl;
+           std::cerr << "performing line sync on " << (int) i << "; line sync error: " << lineSync(carrier_1200, mode->getLineSyncDuration()) << std::endl;
             //reader->advance(.004862 * SAMPLERATE);
         }
 
         if (mode->hasComponentSync()) {
             if (i > 0) {
-                lineSync(carrier_1200, mode->getComponentSyncDuration() * SAMPLERATE);
+                lineSync(carrier_1200, mode->getComponentSyncDuration(i) * SAMPLERATE);
             }
         } else {
-            reader->advance(mode->getComponentSyncDuration() * SAMPLERATE);
+            reader->advance((size_t) (mode->getComponentSyncDuration(i) * SAMPLERATE));
         }
         float* input = reader->getReadPointer();
         // TODO complex color systems (YCrCb)
@@ -298,17 +276,26 @@ float SstvDecoder::lineSync(float carrier, float duration) {
     }
     */
     passedSamples = (unsigned int) (duration * SAMPLERATE * 0.9);
+    bool found = false;
     while (passedSamples++ < timeoutSamples) {
         float average = 0;
         for (unsigned int i = 0; i < 10; i++) {
             average += input[passedSamples + i];
         }
-        std::cerr << ">";
+        //std::cerr << ">";
         float sample = (float) invert * (average / 10) - offset;
         error += fabsf(sample - carrier);
-        if (sample > threshold) break;
+        if (sample > threshold) {
+            found = true;
+            break;
+        }
     }
     std::cerr << std::endl;
-    reader->advance(std::min(passedSamples + 5, timeoutSamples));
+    unsigned int toMove = passedSamples;
+    if (!found) {
+        toMove = (unsigned int) (duration * SAMPLERATE);
+    }
+    std::cerr << "found: " << found << "; moving by " << toMove << " samples; expected: " << duration * SAMPLERATE << std::endl;
+    reader->advance(toMove);
     return error / (float) passedSamples;
 }

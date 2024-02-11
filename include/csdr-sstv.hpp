@@ -20,6 +20,12 @@ namespace Csdr::Sstv {
             }
     };
 
+    class StdDevResult {
+        public:
+            float average;
+            float deviation;
+    };
+
     struct OutputDescription {
         // lets reserve 2 bytes for extended vis codes
         uint16_t vis;
@@ -59,10 +65,9 @@ namespace Csdr::Sstv {
             uint16_t currentLine = 0;
 
             Metrics getSyncError(float* input);
-            Metrics calculateMetrics(float* input, size_t len, float target);
             bool attemptVisDecode(const float* input);
             int getVis(const float* input);
-            float readRawVis(const float* input);
+            static StdDevResult calculateStandardDeviation(const float* input, size_t len);
             float lineSync(float carrier, float duration);
 
             void readColorLine();
