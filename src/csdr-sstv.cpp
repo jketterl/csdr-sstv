@@ -48,8 +48,7 @@ void SstvDecoder::process() {
                         offset = it->offset;
                         invert = it->invert;
                         if (attemptVisDecode(input + 7220)) {
-                            unsigned int syncOffset = 0;
-                            reader->advance(7220 + 3600 - syncOffset);
+                            reader->advance(7220 + 3600 );
                             break;
                         }
                     }
@@ -65,8 +64,7 @@ void SstvDecoder::process() {
                         offset = it->offset;
                         invert = it->invert;
                         if (attemptVisDecode(input + 7320 - age)) {
-                            unsigned int syncOffset = 0;
-                            reader->advance((7320 - age) + 3600 - syncOffset);
+                            reader->advance((7320 - age) + 3600);
                             break;
                         }
                     }
