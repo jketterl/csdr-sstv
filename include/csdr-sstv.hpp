@@ -37,6 +37,7 @@ namespace Csdr::Sstv {
 
     class SstvDecoder: public Csdr::Module<float, unsigned char> {
         public:
+            explicit SstvDecoder();
             ~SstvDecoder() override;
             bool canProcess() override;
             void process() override;
@@ -71,6 +72,9 @@ namespace Csdr::Sstv {
             float lineSync(float carrier, float duration);
 
             void readColorLine();
+            void convertLineData(unsigned char* raw);
+
+            unsigned char* yuvBackBuffer;
     };
 
 }

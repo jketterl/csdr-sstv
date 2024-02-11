@@ -5,8 +5,13 @@
 
 using namespace Csdr::Sstv;
 
+SstvDecoder::SstvDecoder(): Csdr::Module<float, unsigned char>() {
+    yuvBackBuffer = (unsigned char*) malloc(320 * 2);
+}
+
 SstvDecoder::~SstvDecoder() {
     delete mode;
+    delete yuvBackBuffer;
 }
 
 bool SstvDecoder::canProcess() {
@@ -218,7 +223,7 @@ void SstvDecoder::readColorLine() {
         return;
     }
 
-    unsigned char* pixels = writer->getWritePointer();
+    unsigned char pixels[mode->getHorizontalPixels()][mode->getComponentCount()];
 
     for (uint8_t i = 0; i < mode->getComponentCount(); i++) {
         unsigned int lineSamples = (unsigned int) (mode->getComponentDuration(i) * SAMPLERATE);
@@ -237,8 +242,6 @@ void SstvDecoder::readColorLine() {
             reader->advance((size_t) (mode->getComponentSyncDuration(i) * SAMPLERATE));
         }
         float* input = reader->getReadPointer();
-        // TODO complex color systems (YCrCb)
-        unsigned int color = (i + mode->getColorRotation()) % 3;
         for (unsigned int k = 0; k < mode->getHorizontalPixels(); k++) {
             float raw = 0.0;
             for (unsigned int l = 0; l < (unsigned int) samplesPerPixel; l++) {
@@ -246,16 +249,71 @@ void SstvDecoder::readColorLine() {
             }
             raw = ((float) invert * raw - offset) / (unsigned int) samplesPerPixel;
             if (raw < carrier_1500) {
-                pixels[k * 3 + color] = 0;
+                pixels[k][i] = 0;
             } else if (raw > carrier_2300) {
-                pixels[k * 3 + color] = 255;
+                pixels[k][i] = 255;
             } else {
-                pixels[k * 3 + color] = (uint8_t) (((raw - carrier_1500) / (carrier_2300 - carrier_1500)) * 255);
+                pixels[k][i] = (uint8_t) (((raw - carrier_1500) / (carrier_2300 - carrier_1500)) * 255);
             }
         }
         reader->advance(lineSamples);
     }
-    writer->advance(mode->getHorizontalPixels() * 3);
+    convertLineData((unsigned char*) pixels);
+}
+
+void SstvDecoder::convertLineData(unsigned char* raw) {
+    unsigned char* dst = writer->getWritePointer();
+    switch (mode->getColorMode()) {
+        case RGB:
+            std::memcpy(dst, raw, mode->getHorizontalPixels() * 3);
+            writer->advance(mode->getHorizontalPixels() * 3);
+            break;
+        case GBR:
+            for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++) {
+                // GBR -> RGB color mapping
+                dst[i * 3] = raw[i * 3 + 2];
+                dst[i * 3 + 1] = raw[i * 3];
+                dst[i * 3 + 2] = raw[i * 3 + 1];
+            }
+            writer->advance(mode->getHorizontalPixels() * 3);
+            break;
+        case YUV422:
+            for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++) {
+                uint8_t Y = raw[i * 3];
+                int Cr = raw[i * 3 + 1] - 128;
+                int Cb = raw[i * 3 + 2] - 128;
+                dst[i * 3]     = std::min(255, std::max(0, Y + 45 * Cr / 32));
+                dst[i * 3 + 1] = std::min(255, std::max(0, Y - (11 * Cb + 23 * Cr) / 32));
+                dst[i * 3 + 2] = std::min(255, std::max(0, Y + 113 * Cb / 64));
+            }
+            writer->advance(mode->getHorizontalPixels() * 3);
+            break;
+        case YUV420:
+            if (currentLine % 2) {
+                for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++) {
+                    uint8_t Y = yuvBackBuffer[i * 2];
+                    int Cr = yuvBackBuffer[i * 2 + 1] - 128;
+                    int Cb = raw[i * 2 + 1] - 128;
+                    dst[i * 3]     = std::min(255, std::max(0, Y + 45 * Cr / 32));
+                    dst[i * 3 + 1] = std::min(255, std::max(0, Y - (11 * Cb + 23 * Cr) / 32));
+                    dst[i * 3 + 2] = std::min(255, std::max(0, Y + 113 * Cb / 64));
+                }
+                writer->advance(mode->getHorizontalPixels() * 3);
+                dst = writer->getWritePointer();
+                for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++) {
+                    uint8_t Y = raw[i * 2];
+                    int Cr = yuvBackBuffer[i * 2 + 1] - 128;
+                    int Cb = raw[i * 2 + 1] - 128;
+                    dst[i * 3]     = std::min(255, std::max(0, Y + 45 * Cr / 32));
+                    dst[i * 3 + 1] = std::min(255, std::max(0, Y - (11 * Cb + 23 * Cr) / 32));
+                    dst[i * 3 + 2] = std::min(255, std::max(0, Y + 113 * Cb / 64));
+                }
+                writer->advance(mode->getHorizontalPixels() * 3);
+            } else {
+                std::memcpy(yuvBackBuffer, raw, mode->getHorizontalPixels() * 2);
+            }
+            break;
+    }
 }
 
 float SstvDecoder::lineSync(float carrier, float duration) {

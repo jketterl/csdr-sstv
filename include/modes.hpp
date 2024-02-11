@@ -10,6 +10,8 @@
 
 namespace Csdr::Sstv {
 
+    enum ColorMode { RGB, GBR, YUV420, YUV422 };
+
     class Mode {
         public:
             virtual ~Mode() = default;
@@ -25,7 +27,7 @@ namespace Csdr::Sstv {
             virtual float getComponentSyncDuration(uint8_t iteration) = 0;
             virtual float getComponentDuration(uint8_t iteration) = 0;
             // this transforms GBR -> RGB in the decoder.
-            virtual uint8_t getColorRotation() { return 1; }
+            virtual ColorMode getColorMode() { return GBR; }
         protected:
             // protected constructor... use fromVis() or a derived class.
             explicit Mode(int visCode);
@@ -47,7 +49,7 @@ namespace Csdr::Sstv {
                         return .012;
                     // color 36
                     case 8:
-                        return .0105;
+                        return .009;
                     // color 72
                     case 12:
                         return .009;
@@ -75,7 +77,7 @@ namespace Csdr::Sstv {
                     case 4:
                         return iteration == 0 ? 0 : .006;
                     case 8:
-                        return iteration == 0 ? 0 : .0045;
+                        return iteration == 0 ? .003 : .006;
                     case 12:
                         return iteration == 0 ? .003 : .006;
                 }
@@ -88,13 +90,23 @@ namespace Csdr::Sstv {
                     case 4:
                         return iteration == 0 ? .088 : .044;
                     case 8:
-                        return iteration == 0 ? .09 : .045;
+                        return iteration == 0 ? .088 : .044;
                     case 12:
                         return iteration == 0 ? .138 : .069;
                 }
                 return .06;
             }
-            uint8_t getColorRotation() override { return 0; }
+            ColorMode getColorMode() override {
+                switch (visCode) {
+                    case 0:
+                    case 8:
+                        return YUV420;
+                    case 4:
+                    case 12:
+                        return YUV422;
+                }
+                return YUV422;
+            }
     };
 
     class WraaseSC1Mode: public Mode {
