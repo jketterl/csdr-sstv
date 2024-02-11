@@ -49,9 +49,6 @@ void SstvDecoder::process() {
                         invert = it->invert;
                         if (attemptVisDecode(input + 7220)) {
                             unsigned int syncOffset = 0;
-                            if (mode->getLineSyncPosition() == 0) {
-                                syncOffset = mode->getLineSyncDuration() * SAMPLERATE;
-                            }
                             reader->advance(7220 + 3600 - syncOffset);
                             break;
                         }
@@ -69,9 +66,6 @@ void SstvDecoder::process() {
                         invert = it->invert;
                         if (attemptVisDecode(input + 7320 - age)) {
                             unsigned int syncOffset = 0;
-                            if (mode->getLineSyncPosition() == 0) {
-                                syncOffset = mode->getLineSyncDuration() * SAMPLERATE;
-                            }
                             reader->advance((7320 - age) + 3600 - syncOffset);
                             break;
                         }
@@ -86,7 +80,8 @@ void SstvDecoder::process() {
         case DATA: {
             std::cerr << "Reading line " << currentLine << std::endl;
             readColorLine();
-            if (++currentLine >= mode->getVerticalLines()) {
+            currentLine += mode->getLinesPerLineSync();
+            if (currentLine >= mode->getVerticalLines()) {
                 currentLine = 0;
                 delete mode;
                 mode = nullptr;
@@ -225,13 +220,12 @@ void SstvDecoder::readColorLine() {
 
     unsigned char pixels[mode->getHorizontalPixels()][mode->getComponentCount()];
 
-    for (uint8_t i = 0; i < mode->getComponentCount(); i++) {
+    for (unsigned int i = 0; i < mode->getComponentCount(); i++) {
         unsigned int lineSamples = (unsigned int) (mode->getComponentDuration(i) * SAMPLERATE);
         float samplesPerPixel = (float) lineSamples / mode->getHorizontalPixels();
 
         if (mode->getLineSyncPosition() == i) {
-           std::cerr << "performing line sync on " << (int) i << "; line sync error: " << lineSync(carrier_1200, mode->getLineSyncDuration()) << std::endl;
-            //reader->advance(.004862 * SAMPLERATE);
+           lineSync(mode->getLineSyncDuration(), currentLine == 0 && i == 0);
         }
 
         if (mode->hasComponentSync()) {
@@ -279,81 +273,74 @@ void SstvDecoder::convertLineData(unsigned char* raw) {
             break;
         case YUV422:
             for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++) {
-                uint8_t Y = raw[i * 3];
-                int Cr = raw[i * 3 + 1] - 128;
-                int Cb = raw[i * 3 + 2] - 128;
-                dst[i * 3]     = std::min(255, std::max(0, Y + 45 * Cr / 32));
-                dst[i * 3 + 1] = std::min(255, std::max(0, Y - (11 * Cb + 23 * Cr) / 32));
-                dst[i * 3 + 2] = std::min(255, std::max(0, Y + 113 * Cb / 64));
+                convertYUVPixel(dst + i * 3, raw[i * 3], raw[i * 3 + 1] - 128, raw[i * 3 + 2] - 128);
             }
             writer->advance(mode->getHorizontalPixels() * 3);
             break;
         case YUV420:
             if (currentLine % 2) {
                 for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++) {
-                    uint8_t Y = yuvBackBuffer[i * 2];
-                    int Cr = yuvBackBuffer[i * 2 + 1] - 128;
-                    int Cb = raw[i * 2 + 1] - 128;
-                    dst[i * 3]     = std::min(255, std::max(0, Y + 45 * Cr / 32));
-                    dst[i * 3 + 1] = std::min(255, std::max(0, Y - (11 * Cb + 23 * Cr) / 32));
-                    dst[i * 3 + 2] = std::min(255, std::max(0, Y + 113 * Cb / 64));
+                    convertYUVPixel(dst + i * 3, yuvBackBuffer[i * 2], yuvBackBuffer[i * 2 + 1] - 128, raw[i * 2 + 1] - 128);
                 }
                 writer->advance(mode->getHorizontalPixels() * 3);
                 dst = writer->getWritePointer();
                 for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++) {
-                    uint8_t Y = raw[i * 2];
-                    int Cr = yuvBackBuffer[i * 2 + 1] - 128;
-                    int Cb = raw[i * 2 + 1] - 128;
-                    dst[i * 3]     = std::min(255, std::max(0, Y + 45 * Cr / 32));
-                    dst[i * 3 + 1] = std::min(255, std::max(0, Y - (11 * Cb + 23 * Cr) / 32));
-                    dst[i * 3 + 2] = std::min(255, std::max(0, Y + 113 * Cb / 64));
+                    convertYUVPixel(dst + i * 3, raw[i * 2], yuvBackBuffer[i * 2 + 1] - 128, raw[i * 2 + 1] - 128);
                 }
                 writer->advance(mode->getHorizontalPixels() * 3);
             } else {
                 std::memcpy(yuvBackBuffer, raw, mode->getHorizontalPixels() * 2);
             }
             break;
+        case YUV420PD:
+            for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++) {
+                convertYUVPixel(dst + i * 3, raw[i * 4], raw[i * 4 + 1] - 128, raw[i * 4 + 2] - 128);
+            }
+            writer->advance(mode->getHorizontalPixels() * 3);
+            dst = writer->getWritePointer();
+            for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++) {
+                convertYUVPixel(dst + i * 3, raw[i * 4 + 3], raw[i * 4 + 1] - 128, raw[i * 4 + 2] - 128);
+            }
+            writer->advance(mode->getHorizontalPixels() * 3);
+            break;
     }
 }
 
-float SstvDecoder::lineSync(float carrier, float duration) {
+void SstvDecoder::convertYUVPixel(unsigned char *dst, uint8_t Y, int Cr, int Cb) {
+    dst[0] = std::min(255, std::max(0, Y + 45 * Cr / 32));
+    dst[1] = std::min(255, std::max(0, Y - (11 * Cb + 23 * Cr) / 32));
+    dst[2] = std::min(255, std::max(0, Y + 113 * Cb / 64));
+}
+
+void SstvDecoder::lineSync(float duration, bool firstSync) {
     // allow uncertainty of 10%
-    unsigned int timeoutSamples = (unsigned int) (duration * SAMPLERATE * 1.1);
+    unsigned int timeoutSamples = (unsigned int) (duration * SAMPLERATE * 1.5);
     float* input = reader->getReadPointer();
-    float error = 0.0;
     // within 100 Hz of carrier
-    float threshold = carrier + 100.0 / (SAMPLERATE / 2);
+    float threshold = carrier_1200 + 100.0 / (SAMPLERATE / 2);
     unsigned int passedSamples = 0;
-    std::cerr << "line sync: threshold = " << threshold;
-    /*
-    while (passedSamples++ < timeoutSamples) {
-        std::cerr << "<";
-        float sample = (float) invert * input[passedSamples] - offset;
-        error += sample - carrier;
-        if (sample < threshold) break;
+    if (!firstSync) {
+        passedSamples = (unsigned int) (duration * SAMPLERATE * 0.9);
     }
-    */
-    passedSamples = (unsigned int) (duration * SAMPLERATE * 0.9);
     bool found = false;
-    while (passedSamples++ < timeoutSamples) {
-        float average = 0;
-        for (unsigned int i = 0; i < 10; i++) {
-            average += input[passedSamples + i];
+    unsigned int count = 0;
+    unsigned int to_average = 50;
+    while (passedSamples < timeoutSamples) {
+        count = 0;
+        for (unsigned int i = 0; i < to_average; i++) {
+            float sample = (float) invert * input[passedSamples + i] - offset;
+            if (sample > threshold) count++;
         }
-        //std::cerr << ">";
-        float sample = (float) invert * (average / 10) - offset;
-        error += fabsf(sample - carrier);
-        if (sample > threshold) {
+        if (count > to_average / 2) {
             found = true;
             break;
         }
+        passedSamples++;
     }
-    std::cerr << std::endl;
-    unsigned int toMove = passedSamples;
+    unsigned int toMove = passedSamples + (to_average - count);
     if (!found) {
         toMove = (unsigned int) (duration * SAMPLERATE);
     }
     std::cerr << "found: " << found << "; moving by " << toMove << " samples; expected: " << duration * SAMPLERATE << std::endl;
     reader->advance(toMove);
-    return error / (float) passedSamples;
 }

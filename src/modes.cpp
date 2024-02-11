@@ -7,6 +7,15 @@ Mode* Mode::fromVis(int visCode) {
         // Scottie DX overrides AVT
         case 76:
             return new ScottieDXMode();
+        // these don't fit the pattern
+        case 93:
+        case 94:
+        case 95:
+        case 96:
+        case 97:
+        case 98:
+        case 99:
+            return new PDMode(visCode);
     }
     int systemCode = (visCode & 0b01110000) >> 4;
     switch (systemCode) {
@@ -23,29 +32,3 @@ Mode* Mode::fromVis(int visCode) {
     }
     return nullptr;
 }
-
-Mode::Mode(int visCode): visCode(visCode) {};
-
-bool Mode::getHorizontalPixelsBit() {
-    return (visCode & 0b00000100) >> 2;
-}
-
-bool Mode::getVerticalLinesBit() {
-    return (visCode & 0b00001000) >> 3;
-}
-
-uint16_t Mode::getHorizontalPixels() {
-    return getHorizontalPixelsBit() ? 320 : 160;
-}
-
-uint16_t Mode::getVerticalLines() {
-    return getVerticalLinesBit() ? 240 : 120;
-}
-
-RobotMode::RobotMode(int visCode): Mode(visCode) {};
-
-WraaseSC1Mode::WraaseSC1Mode(int visCode): Mode(visCode) {};
-
-MartinMode::MartinMode(int visCode): Mode(visCode) {};
-
-ScottieMode::ScottieMode(int visCode): Mode(visCode) {};

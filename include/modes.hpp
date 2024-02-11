@@ -10,14 +10,14 @@
 
 namespace Csdr::Sstv {
 
-    enum ColorMode { RGB, GBR, YUV420, YUV422 };
+    enum ColorMode { RGB, GBR, YUV420, YUV422, YUV420PD };
 
     class Mode {
         public:
             virtual ~Mode() = default;
             static Mode* fromVis(int visCode);
-            virtual uint16_t getHorizontalPixels();
-            virtual uint16_t getVerticalLines();
+            virtual uint16_t getHorizontalPixels() { return getHorizontalPixelsBit() ? 320 : 160;}
+            virtual uint16_t getVerticalLines() { return getVerticalLinesBit() ? 240 : 120; }
             virtual bool hasLineSync() { return true; }
             virtual float getLineSyncDuration() = 0;
             virtual uint8_t getLineSyncPosition() { return 0; }
@@ -28,17 +28,18 @@ namespace Csdr::Sstv {
             virtual float getComponentDuration(uint8_t iteration) = 0;
             // this transforms GBR -> RGB in the decoder.
             virtual ColorMode getColorMode() { return GBR; }
+            virtual uint8_t getLinesPerLineSync() { return 1; }
         protected:
             // protected constructor... use fromVis() or a derived class.
-            explicit Mode(int visCode);
+            explicit Mode(int visCode): visCode(visCode) {}
             int visCode;
-            bool getHorizontalPixelsBit();
-            bool getVerticalLinesBit();
+            bool getHorizontalPixelsBit() const { return (visCode & 0b00000100) >> 2; }
+            bool getVerticalLinesBit() const { return (visCode & 0b00001000) >> 3; }
     };
 
     class RobotMode: public Mode {
         public:
-            explicit RobotMode(int visCode);
+            explicit RobotMode(int visCode): Mode(visCode) {}
             float getLineSyncDuration() override {
                 switch (visCode) {
                     // color 12
@@ -111,7 +112,7 @@ namespace Csdr::Sstv {
 
     class WraaseSC1Mode: public Mode {
         public:
-            explicit WraaseSC1Mode(int visCode);
+            explicit WraaseSC1Mode(int visCode): Mode(visCode) {}
             uint16_t getHorizontalPixels() override { return getHorizontalPixelsBit() ? 256 : 128; }
             uint16_t getVerticalLines() override { return getVerticalLinesBit() ? 256 : 128; }
             float getLineSyncDuration() override { return .006; }
@@ -123,18 +124,18 @@ namespace Csdr::Sstv {
 
     class MartinMode: public Mode {
         public:
-            explicit MartinMode(int visCode);
+            explicit MartinMode(int visCode): Mode(visCode) {}
             uint16_t getVerticalLines() override { return getVerticalLinesBit() ? 256 : 128; }
-            float getLineSyncDuration() override { return .0052786; }
+            float getLineSyncDuration() override { return .004862; }
             unsigned int getComponentCount() override { return 3; }
             bool hasComponentSync() override { return false; }
-            float getComponentSyncDuration(uint8_t iteration) override { return .000738; }
+            float getComponentSyncDuration(uint8_t iteration) override { return .000572; }
             float getComponentDuration(uint8_t iteration) override { return getHorizontalPixelsBit() ? .146432 : .073216; }
     };
 
     class ScottieMode: public Mode {
         public:
-            explicit ScottieMode(int visCode);
+            explicit ScottieMode(int visCode): Mode(visCode) {}
             uint16_t getVerticalLines() override { return getVerticalLinesBit() ? 256 : 128; }
             float getLineSyncDuration() override { return .009; }
             uint8_t getLineSyncPosition() override { return 2; }
@@ -148,6 +149,70 @@ namespace Csdr::Sstv {
         public:
             explicit ScottieDXMode(): ScottieMode(76) {}
             float getComponentDuration(uint8_t iteration) override { return .3456; }
+    };
+
+    class PDMode: public Mode {
+        public:
+            explicit PDMode(int visCode): Mode(visCode) {};
+            uint16_t getVerticalLines() override {
+                switch (visCode) {
+                    case 93:
+                    case 99:
+                        return 256;
+                    case 95:
+                    case 96:
+                    case 97:
+                        return 496;
+                    case 98:
+                        return 400;
+                    case 94:
+                        return 616;
+                }
+                return Mode::getVerticalLines();
+            }
+            uint16_t getHorizontalPixels() override {
+                switch (visCode) {
+                    case 93:
+                    case 99:
+                        return 320;
+                    case 95:
+                    case 96:
+                    case 97:
+                        return 640;
+                    case 98:
+                        return 512;
+                    case 94:
+                        return 800;
+                }
+                return Mode::getHorizontalPixels();
+            }
+            float getLineSyncDuration() override { return .020; }
+            unsigned int getComponentCount() override { return 4; }
+            bool hasComponentSync() override { return false; }
+            float getComponentSyncDuration(uint8_t iteration) override {
+                return iteration == 0 ? .00208 : 0;
+            }
+            float getComponentDuration(uint8_t iteration) override {
+                switch (visCode) {
+                    case 93: // PD 50
+                        return .09152;
+                    case 99: // PD 90
+                        return .170240;
+                    case 95: // PD 120
+                        return .1216;
+                    case 98: // PD 160
+                        return .195854;
+                    case 96: // PD 180
+                        return .18304;
+                    case 97: // PD 240
+                        return .24448;
+                    case 94: // PD 290
+                        return .2288;
+                }
+                return .09152;
+            }
+            ColorMode getColorMode() override { return YUV420PD; }
+            uint8_t getLinesPerLineSync() override { return 2; }
     };
 
 }

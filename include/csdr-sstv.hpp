@@ -69,10 +69,11 @@ namespace Csdr::Sstv {
             bool attemptVisDecode(const float* input);
             int getVis(const float* input);
             static StdDevResult calculateStandardDeviation(const float* input, size_t len);
-            float lineSync(float carrier, float duration);
+            void lineSync(float duration, bool firstSync);
 
             void readColorLine();
             void convertLineData(unsigned char* raw);
+            void convertYUVPixel(unsigned char* dst, uint8_t Y, int Cr, int Cb);
 
             unsigned char* yuvBackBuffer;
     };
