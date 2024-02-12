@@ -201,7 +201,7 @@ namespace Csdr::Sstv {
                     case 95: // PD 120
                         return .1216;
                     case 98: // PD 160
-                        return .195854;
+                        return .195584;
                     case 96: // PD 180
                         return .18304;
                     case 97: // PD 240
