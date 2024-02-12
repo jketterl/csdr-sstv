@@ -22,15 +22,7 @@ bool SstvDecoder::canProcess() {
             // total 910 ms
             return reader->available() > (size_t) (.91 * SAMPLERATE);
         case DATA:
-            // total time for one line
-            // worst case
-            // assuming line sync takes twice as long as expected
-            float scanDuration = 0;
-            for (unsigned int i = 0; i < mode->getComponentCount(); i++) {
-                scanDuration += mode->getComponentSyncDuration(i) + mode->getComponentDuration(i);
-            }
-            float required = mode->getLineSyncDuration() * 2 + scanDuration;
-            return reader->available() > (size_t) (required * SAMPLERATE);
+            return reader->available() > (size_t) (mode->getLineDuration() * SAMPLERATE);
     }
     return false;
 }

@@ -28,6 +28,14 @@ namespace Csdr::Sstv {
             // this transforms GBR -> RGB in the decoder.
             virtual ColorMode getColorMode() { return GBR; }
             virtual uint8_t getLinesPerLineSync() { return 1; }
+            // this is important for buffer allocation
+            virtual float getLineDuration() {
+                return
+                    // double line sync duration for the worst case scanario
+                    getLineSyncDuration() * 2 +
+                    // this assumes that no component is shorter than the first one
+                    getComponentCount() * (getComponentSyncDuration(0) + getComponentDuration(0));
+            }
         protected:
             // protected constructor... use fromVis() or a derived class.
             explicit Mode(int visCode): visCode(visCode) {}
@@ -143,6 +151,13 @@ namespace Csdr::Sstv {
                 }
             }
             ColorMode getColorMode() override { return RGB; }
+            float getLineDuration() override {
+                return
+                // double line sync duration for the worst case scanario
+                getLineSyncDuration() * 2 +
+                // for this mode, the longest component is the second one
+                getComponentCount() * (getComponentSyncDuration(1) + getComponentDuration(1));
+            }
     };
 
     class MartinMode: public Mode {
