@@ -16,6 +16,11 @@ Mode* Mode::fromVis(int visCode) {
         case 98:
         case 99:
             return new PDMode(visCode);
+        case 51:
+        case 55:
+        case 59:
+        case 63:
+            return new WraaseSC2Mode(visCode);
     }
     int systemCode = (visCode & 0b01110000) >> 4;
     switch (systemCode) {

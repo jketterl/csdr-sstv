@@ -6,7 +6,6 @@
 #define SYSTEMCODE_WRAASE_SC1 1
 #define SYSTEMCODE_MARTIN 2
 #define SYSTEMCODE_SCOTTIE 3
-#define SYSTEMCODE_AVT 4
 
 namespace Csdr::Sstv {
 
@@ -120,6 +119,30 @@ namespace Csdr::Sstv {
             bool hasComponentSync() override { return true; }
             float getComponentSyncDuration(uint8_t iteration) override { return .006; }
             float getComponentDuration(uint8_t iteration) override { return getHorizontalPixelsBit() ? .108 : .54; }
+    };
+
+    class WraaseSC2Mode: public Mode {
+        public:
+            explicit WraaseSC2Mode(int visCode): Mode(visCode) {}
+            uint16_t getHorizontalPixels() override { return 320; }
+            uint16_t getVerticalLines() override { return visCode == 51 ? 128 : 256; }
+            float getLineSyncDuration() override { return .005; }
+            unsigned int getComponentCount() override { return 3; }
+            bool hasComponentSync() override { return false; }
+            float getComponentSyncDuration(uint8_t iteration) override { return .0005; }
+            float getComponentDuration(uint8_t iteration) override {
+                switch (visCode) {
+                    case 51: // SC-2 30
+                    case 59: // SC-2 60
+                        return iteration == 1 ? .117 : .058;
+                    case 63: // SC-2 120
+                        return iteration == 1 ? .235 : .117;
+                    case 55: // SC-2 180
+                    default:
+                        return .235;
+                }
+            }
+            ColorMode getColorMode() override { return RGB; }
     };
 
     class MartinMode: public Mode {
