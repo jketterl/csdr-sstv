@@ -217,7 +217,7 @@ void SstvDecoder::readColorLine() {
         unsigned int lineSamples = (unsigned int) (mode->getComponentDuration(i) * SAMPLERATE);
         float samplesPerPixel = (float) lineSamples / mode->getHorizontalPixels();
 
-        if (mode->getLineSyncPosition() == i) {
+        if (mode->getLineSyncPosition() == i || (currentLine == 0 && i == 0)) {
            lineSync(mode->getLineSyncDuration(), currentLine == 0 && i == 0);
         }
 
