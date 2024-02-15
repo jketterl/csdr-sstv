@@ -9,7 +9,7 @@
 
 namespace Csdr::Sstv {
 
-    enum ColorMode { RGB, GBR, YUV420, YUV422, YUV420PD };
+    enum ColorMode { BW, RGB, GBR, YUV420, YUV422, YUV420PD };
 
     class Mode {
         public:
@@ -26,7 +26,7 @@ namespace Csdr::Sstv {
             virtual float getComponentSyncDuration(uint8_t iteration) = 0;
             virtual float getComponentDuration(uint8_t iteration) = 0;
             // this transforms GBR -> RGB in the decoder.
-            virtual ColorMode getColorMode() { return GBR; }
+            virtual ColorMode getColorMode() { return isColorMode() ? GBR : BW; }
             virtual uint8_t getLinesPerLineSync() { return 1; }
             // this is important for buffer allocation
             virtual float getLineDuration() {
@@ -42,6 +42,7 @@ namespace Csdr::Sstv {
             int visCode;
             bool getHorizontalPixelsBit() const { return (visCode & 0b00000100) >> 2; }
             bool getVerticalLinesBit() const { return (visCode & 0b00001000) >> 3; }
+            bool isColorMode() const { return (visCode & 0b00000011) == 0; }
     };
 
     class RobotMode: public Mode {
@@ -61,12 +62,32 @@ namespace Csdr::Sstv {
                     // color 72
                     case 12:
                         return .009;
+                    // B&W 8
+                    case 1:
+                    case 2:
+                    case 3:
+                        return .01;
+                    // B&W 12
+                    case 5:
+                    case 6:
+                    case 7:
+                        return .007;
+                    // B&W 24
+                    case 9:
+                    case 10:
+                    case 11:
+                    // B&W 36
+                    case 13:
+                    case 14:
+                    case 15:
+                        return .12;
                 }
                 // switch should be exhaustive by VIS code
                 return .007;
             }
             // this is all mostly wrong since we can't correctly model the YCrCb color model here yet
             unsigned int getComponentCount() override {
+                if (!isColorMode()) return 1;
                 switch (visCode) {
                     case 0:
                     case 8:
@@ -101,10 +122,30 @@ namespace Csdr::Sstv {
                         return iteration == 0 ? .088 : .044;
                     case 12:
                         return iteration == 0 ? .138 : .069;
+                    // B&W 8
+                    case 1:
+                    case 2:
+                    case 3:
+                        return .056;
+                    // B&W 12
+                    case 5:
+                    case 6:
+                    case 7:
+                    // B&W 24
+                    case 9:
+                    case 10:
+                    case 11:
+                        return .093;
+                    // B&W 36
+                    case 13:
+                    case 14:
+                    case 15:
+                        return .138;
                 }
                 return .06;
             }
             ColorMode getColorMode() override {
+                if (!isColorMode()) return BW;
                 switch (visCode) {
                     case 0:
                     case 8:

@@ -251,6 +251,12 @@ void SstvDecoder::readColorLine() {
 void SstvDecoder::convertLineData(unsigned char* raw) {
     unsigned char* dst = writer->getWritePointer();
     switch (mode->getColorMode()) {
+        case BW:
+            for (unsigned int i = 0; i < mode->getHorizontalPixels(); i++ ) {
+                dst[i * 3] = dst[i * 3 + 1] = dst[i * 3 + 2] = raw[i];
+            }
+            writer->advance(mode->getHorizontalPixels() * 3);
+            break;
         case RGB:
             std::memcpy(dst, raw, mode->getHorizontalPixels() * 3);
             writer->advance(mode->getHorizontalPixels() * 3);
