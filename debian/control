@@ -1,0 +1,17 @@
+Source: csdr-sstv
+Maintainer: Jakob Ketterl <jakob.ketterl@gmx.de>
+Section: hamradio
+Priority: optional
+Rules-Requires-Root: no
+Standards-Version: 4.3.0
+Build-Depends: debhelper (>= 12), cmake, libcsdr-dev (>= 0.19)
+
+Package: libcsdr-sstv0
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: SSTV decoder as a csdr Module
+
+Package: libcsdr-sstv-dev
+Architecture: any
+Depends: libcsdr-sstv0 (=${binary:Version}), libcsdr-dev (>= 0.19), ${misc:Depends}
+Description: development dependencies for libcsdr-sstv
