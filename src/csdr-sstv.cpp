@@ -234,7 +234,7 @@ void SstvDecoder::readColorLine() {
             for (unsigned int l = 0; l < (unsigned int) samplesPerPixel; l++) {
                 raw += input[(unsigned int) (k * samplesPerPixel) + l];
             }
-            raw = ((float) invert * raw - offset) / (unsigned int) samplesPerPixel;
+            raw = (float) invert * (raw / (unsigned int)samplesPerPixel) - offset;
             if (raw < carrier_1500) {
                 pixels[k][i] = 0;
             } else if (raw > carrier_2300) {
