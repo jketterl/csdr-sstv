@@ -107,6 +107,7 @@ bool SstvDecoder::attemptVisDecode(const float *input) {
     writer->advance(sizeof(OutputDescription));
 
     previous_errors.clear();
+    lineOffset = 0.0;
     state = DATA;
     return true;
 }
@@ -214,8 +215,8 @@ void SstvDecoder::readColorLine() {
     unsigned char pixels[mode->getHorizontalPixels()][mode->getComponentCount()];
 
     for (unsigned int i = 0; i < mode->getComponentCount(); i++) {
-        unsigned int lineSamples = (unsigned int) (mode->getComponentDuration(i) * SAMPLERATE);
-        float samplesPerPixel = (float) lineSamples / mode->getHorizontalPixels();
+        float lineSamples = mode->getComponentDuration(i) * SAMPLERATE;
+        float samplesPerPixel = lineSamples / mode->getHorizontalPixels();
 
         if (mode->getLineSyncPosition() == i || (currentLine == 0 && i == 0)) {
            lineSync(mode->getLineSyncDuration(), currentLine == 0 && i == 0);
@@ -234,7 +235,7 @@ void SstvDecoder::readColorLine() {
             for (unsigned int l = 0; l < (unsigned int) samplesPerPixel; l++) {
                 raw += input[(unsigned int) (k * samplesPerPixel) + l];
             }
-            raw = (float) invert * (raw / (unsigned int)samplesPerPixel) - offset;
+            raw = (float) invert * (raw / (unsigned int) samplesPerPixel) - offset;
             if (raw < carrier_1500) {
                 pixels[k][i] = 0;
             } else if (raw > carrier_2300) {
@@ -243,7 +244,11 @@ void SstvDecoder::readColorLine() {
                 pixels[k][i] = (uint8_t) (((raw - carrier_1500) / (carrier_2300 - carrier_1500)) * 255);
             }
         }
-        reader->advance(lineSamples);
+        // try to get better timing precision by keeping a sub-sample floating point offset
+        float to_advance = lineSamples + lineOffset;
+        reader->advance((size_t) to_advance);
+        float integral;
+        lineOffset = modff(to_advance, &integral);
     }
     convertLineData((unsigned char*) pixels);
 }

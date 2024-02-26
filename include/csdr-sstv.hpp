@@ -64,6 +64,7 @@ namespace Csdr::Sstv {
             int8_t invert = 1;
 
             uint16_t currentLine = 0;
+            float lineOffset = 0.0;
 
             Metrics getSyncError(float* input);
             bool attemptVisDecode(const float* input);
