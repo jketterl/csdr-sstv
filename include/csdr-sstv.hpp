@@ -31,6 +31,9 @@ namespace Csdr::Sstv {
         uint16_t vis;
         uint16_t pixels;
         uint16_t lines;
+        float error;
+        float offset;
+        float visError;
     };
 
     char outputSync[4] = { 'S', 'Y', 'N', 'C' };
@@ -67,8 +70,8 @@ namespace Csdr::Sstv {
             float lineOffset = 0.0;
 
             Metrics getSyncError(float* input);
-            bool attemptVisDecode(const float* input);
-            int getVis(const float* input);
+            bool attemptVisDecode(const float* input, Metrics metrics);
+            int getVis(const float* input, float& visError);
             static StdDevResult calculateStandardDeviation(const float* input, size_t len);
             void lineSync(float duration, bool firstSync);
 

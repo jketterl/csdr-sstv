@@ -2,6 +2,7 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 
 using namespace Csdr::Sstv;
 
@@ -35,14 +36,13 @@ void SstvDecoder::process() {
             if (m.error < 0.5) {
                 // wait until we have reached the point of least error
                 previous_errors.push_back(m);
-                std::cerr << "error cache size: " << previous_errors.size() << "; error: " << m.error << std::endl;
                 if (previous_errors.size() > 100) {
                     auto it = std::min_element(previous_errors.begin(), previous_errors.end());
-                    if (it == previous_errors.begin() && it->error < .3) {
-                        std::cerr << "overflow; sync error: " << it->error << "; offset: " << it->offset << "; invert: " << (int) it->invert << std::endl;
+                    if (it == previous_errors.begin() && it->error < .1) {
+                        std::cerr << "sync error: " << it->error << "; offset: " << it->offset << "; invert: " << (int) it->invert << std::endl;
                         offset = it->offset;
                         invert = it->invert;
-                        if (attemptVisDecode(input + 7220)) {
+                        if (attemptVisDecode(input + 7220, *it)) {
                             reader->advance(7220 + 3600 );
                             break;
                         }
@@ -53,12 +53,12 @@ void SstvDecoder::process() {
             } else {
                 if (!previous_errors.empty()) {
                     auto it = std::min_element(previous_errors.begin(), previous_errors.end());
-                    if (it->error < .3) {
+                    if (it->error < .1) {
                         auto age = std::distance(it, previous_errors.end());
-                        std::cerr << "age: " << age << " sync error: " << it->error << "; offset: " << it->offset << "; invert: " << (int) it->invert << std::endl;
+                        std::cerr << "sync error: " << it->error << "; offset: " << it->offset << "; invert: " << (int) it->invert << std::endl;
                         offset = it->offset;
                         invert = it->invert;
-                        if (attemptVisDecode(input + 7320 - age)) {
+                        if (attemptVisDecode(input + 7320 - age, *it)) {
                             reader->advance((7320 - age) + 3600);
                             break;
                         }
@@ -71,7 +71,6 @@ void SstvDecoder::process() {
             break;
         }
         case DATA: {
-            std::cerr << "Reading line " << currentLine << std::endl;
             readColorLine();
             currentLine += mode->getLinesPerLineSync();
             if (currentLine >= mode->getVerticalLines()) {
@@ -85,16 +84,17 @@ void SstvDecoder::process() {
     }
 }
 
-bool SstvDecoder::attemptVisDecode(const float *input) {
-    int vis = getVis(input);
+bool SstvDecoder::attemptVisDecode(const float *input, Metrics metrics) {
+    float visError;
+    int vis = getVis(input, visError);
     if (vis < 0) return false;
 
-    std::cerr << "Detected VIS: " << vis << std::endl;
     mode = Mode::fromVis(vis);
     if (mode == nullptr) {
         std::cerr << "mode not implemented; no mode for vis " << vis << std::endl;
         return false;
     }
+    std::cerr << "Detected VIS: " << vis << std::endl;
 
     memcpy(writer->getWritePointer(), outputSync, sizeof(outputSync));
     writer->advance(sizeof(outputSync));
@@ -102,6 +102,9 @@ bool SstvDecoder::attemptVisDecode(const float *input) {
         .vis = (uint16_t) vis,
         .pixels = mode->getHorizontalPixels(),
         .lines = mode->getVerticalLines(),
+        .error = metrics.error,
+        .offset = metrics.offset,
+        .visError = visError,
     };
     memcpy(writer->getWritePointer(), &out, sizeof(OutputDescription));
     writer->advance(sizeof(OutputDescription));
@@ -157,12 +160,12 @@ Metrics SstvDecoder::getSyncError(float *input) {
     };
 }
 
-int SstvDecoder::getVis(const float* input) {
+int SstvDecoder::getVis(const float* input, float& visError) {
     uint8_t result = 0;
     bool parity = false;
     unsigned int numSamples = .03 * SAMPLERATE;
 
-    float visError = 0.0;
+    visError = 0.0;
     StdDevResult results[10];
     for (unsigned int i = 0; i < 10; i++) {
         results[i] = calculateStandardDeviation(input + i * numSamples, numSamples);
@@ -345,6 +348,6 @@ void SstvDecoder::lineSync(float duration, bool firstSync) {
     if (!found) {
         toMove = (unsigned int) (duration * SAMPLERATE);
     }
-    std::cerr << "found: " << found << "; moving by " << toMove << " samples; expected: " << duration * SAMPLERATE << std::endl;
+    // std::cerr << "found: " << found << "; moving by " << toMove << " samples; expected: " << duration * SAMPLERATE << std::endl;
     reader->advance(toMove);
 }
